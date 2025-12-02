@@ -244,6 +244,14 @@ app.post("/api/whatsapp/sessions", async (req, res) => {
 
     const sessionId = `session-${Date.now()}`
 
+    console.log("[v0] ==================== CREATING SESSION ====================")
+    console.log("[v0] Session name:", name)
+    console.log("[v0] Session ID:", sessionId)
+    console.log("[v0] Supabase URL:", process.env.NEXT_PUBLIC_SUPABASE_URL)
+    console.log("[v0] Has service_role key:", !!process.env.SUPABASE_SERVICE_ROLE_KEY)
+    console.log("[v0] Key length:", process.env.SUPABASE_SERVICE_ROLE_KEY?.length)
+    console.log("[v0] Attempting INSERT...")
+
     const { data: newSession, error } = await supabase
       .from("whatsapp_sessions")
       .insert([
@@ -257,14 +265,25 @@ app.post("/api/whatsapp/sessions", async (req, res) => {
       .select()
       .single()
 
+    console.log("[v0] INSERT Response:")
+    console.log("[v0] - Error:", JSON.stringify(error, null, 2))
+    console.log("[v0] - Data:", JSON.stringify(newSession, null, 2))
+    console.log("[v0] ============================================================")
+
     if (error) {
-      console.error("Supabase error:", error)
-      return res.status(500).json({ error: "Erro ao criar sessão no banco de dados: " + error.message })
+      console.error("[v0] ❌ Supabase INSERT error:", error)
+      return res.status(500).json({
+        error: "Erro ao criar sessão no banco de dados: " + error.message,
+        details: error,
+      })
     }
 
     if (!newSession) {
+      console.error("[v0] ❌ No session data returned from INSERT")
       return res.status(500).json({ error: "Sessão criada mas não retornou dados" })
     }
+
+    console.log("[v0] ✅ Session created successfully in Supabase:", newSession.id)
 
     const transformedSession = {
       _id: newSession.id,
@@ -289,8 +308,8 @@ app.post("/api/whatsapp/sessions", async (req, res) => {
       session: transformedSession,
     })
   } catch (error) {
-    console.error("Error creating session:", error)
-    res.status(500).json({ error: error.message })
+    console.error("[v0] ❌ Unexpected error creating session:", error)
+    res.status(500).json({ error: error.message, stack: error.stack })
   }
 })
 
@@ -413,7 +432,7 @@ app.use((req, res) => {
   })
 })
 
-const PORT = process.env.PORT || 5000
+const PORT = Number.parseInt(process.env.PORT, 10) || 5000
 
 httpServer.listen(PORT, "0.0.0.0", () => {
   console.log(`

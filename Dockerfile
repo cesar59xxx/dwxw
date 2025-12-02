@@ -1,38 +1,42 @@
-FROM node:18-alpine
+FROM node:20-slim
 
-# Instalar dependências do Puppeteer
-RUN apk add --no-cache \
+# Install Chromium and dependencies for WhatsApp Web
+RUN apt-get update && apt-get install -y \
+    chromium \
+    fonts-liberation \
+    libnss3 \
+    libxss1 \
     wget \
     ca-certificates \
-    font-noto \
-    chromium \
-    nss \
-    freetype \
-    harfbuzz \
-    && rm -rf /var/cache/apk/*
+    --no-install-recommends \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-# Copiar package files
+# Copy all package files
 COPY package*.json ./
+COPY server/package*.json ./server/
 
-RUN npm install --production
+# Install dependencies
+RUN npm install
+RUN cd server && npm install
 
-# Copiar código
+# Copy application code
 COPY . .
 
-# Build Next.js
+# Create sessions directory
+RUN mkdir -p ./server/whatsapp-sessions && chmod 777 ./server/whatsapp-sessions
+
+# Set Puppeteer environment variables
+ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
+ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
+
+ENV PORT=5000
+
+# Expose ports
+EXPOSE 3000 5000
+
+# Build Next.js (frontend)
 RUN npm run build
 
-# Criar pasta de sessões
-RUN mkdir -p whatsapp-sessions && chmod 777 whatsapp-sessions
-
-# Expor porta
-EXPOSE 3000
-
-# Healthcheck
-HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
-  CMD node -e "require('http').get('http://localhost:3000', (r) => { process.exit(r.statusCode === 200 ? 0 : 1); });"
-
-# Start Next.js
-CMD ["npm", "run", "start"]
+CMD ["sh", "-c", "cd server && PORT=${PORT:-5000} node index.js & npm run start"]
