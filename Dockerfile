@@ -1,6 +1,5 @@
 FROM node:20-slim
 
-# Install Chromium for WhatsApp Web
 RUN apt-get update && apt-get install -y \
     chromium \
     fonts-liberation \
@@ -11,24 +10,21 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /app
 
-# Copy package files
+# Copy and install dependencies
 COPY package*.json ./
 COPY server/package*.json ./server/
-
-# Install ALL dependencies
 RUN npm install && cd server && npm install
 
-# Copy all code
+# Copy source code
 COPY . .
 
-# Build Next.js frontend
+# Build Next.js
 RUN npm run build
 
 # Create sessions directory
 RUN mkdir -p ./server/whatsapp-sessions
 
-# Set Puppeteer to use system Chromium
 ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
 ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
 
-CMD cd server && node index.js & npm run start
+CMD ["node", "server/index.js"]
