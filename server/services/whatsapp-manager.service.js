@@ -92,9 +92,14 @@ class WhatsAppManager {
 
           // Emitir via Socket.IO apenas a string original
           if (global.io) {
-            global.io.emit("whatsapp:qr", {
+            global.io.to(sessionId).emit("whatsapp:qr", {
               sessionId,
               qr, // String original do QR
+            })
+            // Also emit globally for backward compatibility
+            global.io.emit("whatsapp:qr", {
+              sessionId,
+              qr,
             })
           }
 
@@ -147,7 +152,6 @@ class WhatsAppManager {
       client.on("ready", async () => {
         console.log(`[${sessionId}] ✅ Cliente pronto!`)
 
-        // Obter informações do WhatsApp
         const info = client.info
 
         await supabase
@@ -155,12 +159,23 @@ class WhatsAppManager {
           .update({
             status: "connected",
             phone_number: info.wid.user,
+            qr_code: null,
+            last_connected: new Date().toISOString(),
             updated_at: new Date().toISOString(),
           })
           .eq("session_id", sessionId)
 
         if (global.io) {
-          global.io.emit("whatsapp:status", { sessionId, status: "connected", phoneNumber: info.wid.user })
+          global.io.to(sessionId).emit("whatsapp:status", {
+            sessionId,
+            status: "connected",
+            phoneNumber: info.wid.user,
+          })
+          // Also emit globally
+          global.io.emit("session-connected", {
+            sessionId,
+            phoneNumber: info.wid.user,
+          })
         }
       })
 
@@ -205,10 +220,12 @@ class WhatsAppManager {
             direction: msg.fromMe ? "outgoing" : "incoming",
           }
 
-          await this.saveMessage(sessionId, messageData)
+          // Save to database
+          const savedMessage = await this.saveMessage(sessionId, messageData)
 
           if (global.io) {
-            global.io.emit("whatsapp:message", messageData)
+            global.io.to(sessionId).emit("message", savedMessage)
+            global.io.emit("whatsapp:message", savedMessage)
           }
         } catch (error) {
           console.error(`[${sessionId}] Error handling message:`, error)

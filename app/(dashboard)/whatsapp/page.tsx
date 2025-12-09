@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
-import { Plus, Power, RefreshCw, Send, MessageCircle } from "lucide-react"
+import { Plus, Power, RefreshCw, Send, MessageCircle, User } from "lucide-react"
 import {
   Dialog,
   DialogContent,
@@ -42,9 +42,21 @@ interface Message {
   status: string
 }
 
+interface Contact {
+  id: string
+  whatsapp_id: string
+  name: string
+  phone_number: string
+  avatar?: string
+  last_interaction?: string
+  total_messages?: number
+}
+
 export default function WhatsAppPage() {
   const [sessions, setSessions] = useState<Session[]>([])
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null)
+  const [selectedContact, setSelectedContact] = useState<Contact | null>(null)
+  const [contacts, setContacts] = useState<Contact[]>([])
   const [messages, setMessages] = useState<Record<string, Message[]>>({})
   const [newMessage, setNewMessage] = useState("")
   const [isLoading, setIsLoading] = useState(true)
@@ -67,6 +79,10 @@ export default function WhatsAppPage() {
 
     socketConnection.on("connect", () => {
       console.log("[v0] ✅ WebSocket connected!")
+
+      if (selectedSessionId) {
+        socketConnection.emit("join-session", selectedSessionId)
+      }
     })
 
     socketConnection.on("whatsapp:qr", async ({ sessionId, qr }) => {
@@ -104,44 +120,71 @@ export default function WhatsAppPage() {
           s.sessionId === sessionId
             ? {
                 ...s,
-                status,
-                isConnected: status === "connected",
+                status: status === "ready" ? "connected" : status,
+                isConnected: status === "connected" || status === "ready",
                 phoneNumber: phoneNumber || s.phoneNumber,
-                qrCode: status === "connected" ? null : s.qrCode,
+                qrCode: status === "connected" || status === "ready" ? null : s.qrCode,
               }
             : s,
         ),
       )
 
-      // Close QR dialog when connected
-      if (status === "connected") {
+      if (status === "connected" || status === "ready") {
         setQrCodeDialog((prev) =>
           prev.sessionId === sessionId ? { open: false, qrCode: null, sessionId: null } : prev,
         )
       }
     })
 
+    socketConnection.on("session-connected", ({ sessionId }) => {
+      console.log("[v0] 🟢 Session connected:", sessionId)
+      setSessions((prev) =>
+        prev.map((s) =>
+          s.sessionId === sessionId ? { ...s, status: "connected", isConnected: true, qrCode: null } : s,
+        ),
+      )
+    })
+
     socketConnection.on("whatsapp:message", (messageData) => {
       console.log("[v0] 💬 New message received:", messageData)
 
-      // Only update if this is the selected session
-      if (selectedSessionId && messageData.sessionId === selectedSessionId) {
-        const newMsg: Message = {
-          id: Date.now().toString(),
-          session_id: messageData.sessionId,
-          from_number: messageData.from,
-          to_number: messageData.to,
-          body: messageData.body,
-          timestamp: new Date(messageData.timestamp * 1000).toISOString(),
-          direction: messageData.direction,
-          status: "delivered",
-        }
-
-        setMessages((prev) => ({
-          ...prev,
-          [messageData.sessionId]: [...(prev[messageData.sessionId] || []), newMsg],
-        }))
+      const newMsg: Message = {
+        id: messageData.id || Date.now().toString(),
+        session_id: messageData.sessionId || messageData.session_id,
+        from_number: messageData.from || messageData.from_number,
+        to_number: messageData.to || messageData.to_number,
+        body: messageData.body,
+        timestamp: messageData.timestamp
+          ? new Date(messageData.timestamp * 1000).toISOString()
+          : new Date().toISOString(),
+        direction: messageData.direction,
+        status: messageData.status || "delivered",
       }
+
+      setMessages((prev) => ({
+        ...prev,
+        [newMsg.session_id]: [...(prev[newMsg.session_id] || []), newMsg],
+      }))
+    })
+
+    socketConnection.on("message", (messageData) => {
+      console.log("[v0] 📨 Room message received:", messageData)
+
+      const newMsg: Message = {
+        id: messageData.id || Date.now().toString(),
+        session_id: messageData.session_id,
+        from_number: messageData.from_number,
+        to_number: messageData.to_number,
+        body: messageData.body,
+        timestamp: messageData.timestamp,
+        direction: messageData.direction,
+        status: messageData.status || "delivered",
+      }
+
+      setMessages((prev) => ({
+        ...prev,
+        [newMsg.session_id]: [...(prev[newMsg.session_id] || []), newMsg],
+      }))
     })
 
     socketConnection.on("disconnect", () => {
@@ -153,12 +196,19 @@ export default function WhatsAppPage() {
     return () => {
       socketConnection.disconnect()
     }
-  }, [selectedSessionId])
+  }, [])
+
+  useEffect(() => {
+    if (socket && selectedSessionId) {
+      console.log("[v0] Joining session room:", selectedSessionId)
+      socket.emit("join-session", selectedSessionId)
+    }
+  }, [socket, selectedSessionId])
 
   const loadSessions = async () => {
     try {
       const data = await apiClient.getSessions()
-      setSessions(data.sessions || [])
+      setSessions(data.data || data.sessions || [])
     } catch (error) {
       console.error("[v0] ❌ Failed to load sessions:", error)
     } finally {
@@ -166,17 +216,24 @@ export default function WhatsAppPage() {
     }
   }
 
+  const loadContacts = async (sessionId: string) => {
+    try {
+      console.log("[v0] Loading contacts for session:", sessionId)
+      const response = await apiClient.getContacts({ sessionId, limit: 100 })
+      setContacts(response.data || [])
+    } catch (error) {
+      console.error("[v0] Failed to load contacts:", error)
+    }
+  }
+
   const loadMessages = async (sessionId: string) => {
     try {
       console.log("[v0] Loading messages for session:", sessionId)
-      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/messages/${sessionId}`)
-      const data = await response.json()
-
-      console.log("[v0] Messages loaded:", data.messages?.length || 0)
+      const response = await apiClient.getMessages(sessionId)
 
       setMessages((prev) => ({
         ...prev,
-        [sessionId]: data.messages || [],
+        [sessionId]: response.data || response.messages || [],
       }))
     } catch (error) {
       console.error("[v0] Failed to load messages:", error)
@@ -193,6 +250,7 @@ export default function WhatsAppPage() {
     if (selectedSessionId) {
       const session = sessions.find((s) => s.sessionId === selectedSessionId)
       if (session?.isConnected) {
+        loadContacts(selectedSessionId)
         loadMessages(selectedSessionId)
       }
     }
@@ -241,20 +299,26 @@ export default function WhatsAppPage() {
   }
 
   const handleSendMessage = async () => {
-    if (!newMessage.trim() || !selectedSessionId) return
+    if (!newMessage.trim() || !selectedSessionId || !selectedContact) return
 
     try {
-      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/messages/send`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          sessionId: selectedSessionId,
-          to: "recipient@c.us", // This should be dynamic based on selected contact
-          message: newMessage,
-        }),
-      })
+      await apiClient.sendMessageToNumber(selectedSessionId, selectedContact.whatsapp_id, newMessage)
 
-      if (!response.ok) throw new Error("Failed to send message")
+      const optimisticMessage: Message = {
+        id: Date.now().toString(),
+        session_id: selectedSessionId,
+        from_number: selectedSessionId,
+        to_number: selectedContact.whatsapp_id,
+        body: newMessage,
+        timestamp: new Date().toISOString(),
+        direction: "outgoing",
+        status: "sent",
+      }
+
+      setMessages((prev) => ({
+        ...prev,
+        [selectedSessionId]: [...(prev[selectedSessionId] || []), optimisticMessage],
+      }))
 
       setNewMessage("")
     } catch (error) {
@@ -264,7 +328,7 @@ export default function WhatsAppPage() {
   }
 
   const getStatusBadge = (status: string, isConnected?: boolean) => {
-    if (isConnected && status === "connected") {
+    if (isConnected && (status === "connected" || status === "ready")) {
       return <Badge className="bg-green-500">Conectado</Badge>
     }
 
@@ -274,6 +338,7 @@ export default function WhatsAppPage() {
       case "authenticated":
         return <Badge className="bg-blue-500">Autenticando</Badge>
       case "connected":
+      case "ready":
         return <Badge className="bg-green-500">Conectado</Badge>
       case "disconnected":
         return <Badge variant="outline">Desconectado</Badge>
@@ -288,8 +353,10 @@ export default function WhatsAppPage() {
     return <div>Carregando...</div>
   }
 
+  const currentSessionMessages = selectedSessionId ? messages[selectedSessionId] || [] : []
+
   return (
-    <div className="grid grid-cols-1 md:grid-cols-3 gap-6 h-[calc(100vh-8rem)]">
+    <div className="grid grid-cols-1 md:grid-cols-4 gap-6 h-[calc(100vh-8rem)]">
       <div className="space-y-4">
         <div className="flex items-center justify-between">
           <h2 className="text-xl font-bold">Instâncias</h2>
@@ -325,7 +392,7 @@ export default function WhatsAppPage() {
               <Card
                 key={session._id}
                 className={`cursor-pointer transition-colors ${
-                  selectedSessionId === session.sessionId ? "border-primary" : ""
+                  selectedSessionId === session.sessionId ? "border-primary bg-primary/5" : ""
                 }`}
                 onClick={() => setSelectedSessionId(session.sessionId)}
               >
@@ -359,6 +426,51 @@ export default function WhatsAppPage() {
         </ScrollArea>
       </div>
 
+      <div className="space-y-4">
+        <div className="flex items-center justify-between">
+          <h2 className="text-xl font-bold">Conversas</h2>
+        </div>
+
+        {selectedSessionId ? (
+          <ScrollArea className="h-[calc(100vh-12rem)]">
+            <div className="space-y-2">
+              {contacts.length === 0 && (
+                <Card>
+                  <CardContent className="p-4 text-center text-sm text-muted-foreground">
+                    Nenhuma conversa ainda
+                  </CardContent>
+                </Card>
+              )}
+              {contacts.map((contact) => (
+                <Card
+                  key={contact.id}
+                  className={`cursor-pointer transition-colors ${
+                    selectedContact?.id === contact.id ? "border-primary bg-primary/5" : ""
+                  }`}
+                  onClick={() => setSelectedContact(contact)}
+                >
+                  <CardHeader className="p-3">
+                    <div className="flex items-center gap-2">
+                      <div className="h-10 w-10 rounded-full bg-primary/10 flex items-center justify-center">
+                        <User className="h-5 w-5" />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <CardTitle className="text-sm truncate">{contact.name}</CardTitle>
+                        <CardDescription className="text-xs truncate">+{contact.phone_number}</CardDescription>
+                      </div>
+                    </div>
+                  </CardHeader>
+                </Card>
+              ))}
+            </div>
+          </ScrollArea>
+        ) : (
+          <Card className="h-full flex items-center justify-center">
+            <CardContent className="text-center text-sm text-muted-foreground">Selecione uma instância</CardContent>
+          </Card>
+        )}
+      </div>
+
       <div className="md:col-span-2">
         {!selectedSessionId ? (
           <Card className="h-full flex items-center justify-center">
@@ -367,33 +479,56 @@ export default function WhatsAppPage() {
               <p className="text-muted-foreground">Selecione uma instância para ver as mensagens</p>
             </CardContent>
           </Card>
+        ) : !selectedContact ? (
+          <Card className="h-full flex items-center justify-center">
+            <CardContent className="text-center">
+              <User className="h-12 w-12 mx-auto mb-4 text-muted-foreground" />
+              <p className="text-muted-foreground">Selecione uma conversa para ver as mensagens</p>
+            </CardContent>
+          </Card>
         ) : (
           <Card className="h-full flex flex-col">
             <CardHeader>
-              <CardTitle>{sessions.find((s) => s.sessionId === selectedSessionId)?.name || "Chat"}</CardTitle>
+              <div className="flex items-center gap-2">
+                <div className="h-10 w-10 rounded-full bg-primary/10 flex items-center justify-center">
+                  <User className="h-5 w-5" />
+                </div>
+                <div>
+                  <CardTitle>{selectedContact.name}</CardTitle>
+                  <CardDescription>+{selectedContact.phone_number}</CardDescription>
+                </div>
+              </div>
             </CardHeader>
             <Separator />
             <CardContent className="flex-1 p-0">
               <ScrollArea className="h-[calc(100vh-20rem)] p-4">
                 <div className="space-y-4">
-                  {messages[selectedSessionId]?.length === 0 && (
+                  {currentSessionMessages.length === 0 && (
                     <p className="text-center text-muted-foreground">Nenhuma mensagem ainda</p>
                   )}
-                  {messages[selectedSessionId]?.map((msg) => (
-                    <div
-                      key={msg.id}
-                      className={`flex ${msg.direction === "outgoing" ? "justify-end" : "justify-start"}`}
-                    >
+                  {currentSessionMessages
+                    .filter(
+                      (msg) =>
+                        msg.from_number === selectedContact.whatsapp_id ||
+                        msg.to_number === selectedContact.whatsapp_id,
+                    )
+                    .map((msg) => (
                       <div
-                        className={`max-w-[70%] rounded-lg p-3 ${
-                          msg.direction === "outgoing" ? "bg-primary text-primary-foreground" : "bg-muted"
-                        }`}
+                        key={msg.id}
+                        className={`flex ${msg.direction === "outgoing" ? "justify-end" : "justify-start"}`}
                       >
-                        <p className="text-sm">{msg.body}</p>
-                        <p className="text-xs opacity-70 mt-1">{new Date(msg.timestamp).toLocaleTimeString("pt-BR")}</p>
+                        <div
+                          className={`max-w-[70%] rounded-lg p-3 ${
+                            msg.direction === "outgoing" ? "bg-primary text-primary-foreground" : "bg-muted"
+                          }`}
+                        >
+                          <p className="text-sm">{msg.body}</p>
+                          <p className="text-xs opacity-70 mt-1">
+                            {new Date(msg.timestamp).toLocaleTimeString("pt-BR")}
+                          </p>
+                        </div>
                       </div>
-                    </div>
-                  ))}
+                    ))}
                 </div>
               </ScrollArea>
             </CardContent>

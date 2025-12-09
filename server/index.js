@@ -145,6 +145,8 @@ app.get("/", (req, res) => {
       testSupabase: "/api/test/supabase",
       fetchMessages: "/api/messages/:sessionId",
       sendMessageEndpoint: "/api/messages/send",
+      contacts: "/api/contacts",
+      sessionStatus: "/api/whatsapp/:sessionId/status",
     },
   })
 })
@@ -182,6 +184,49 @@ app.get("/api/test/supabase", async (req, res) => {
   }
 })
 
+app.get("/api/contacts", async (req, res) => {
+  try {
+    const { sessionId, limit = 100 } = req.query
+
+    console.log("[v0] GET /api/contacts - sessionId:", sessionId, "limit:", limit)
+
+    const query = supabase
+      .from("contacts")
+      .select("*")
+      .order("last_interaction", { ascending: false })
+      .limit(Number(limit))
+
+    if (sessionId) {
+      // Filter by session_id if provided
+      const { data: messages } = await supabase
+        .from("messages")
+        .select("from_number, to_number")
+        .eq("session_id", sessionId)
+
+      const uniqueNumbers = new Set()
+      messages?.forEach((msg) => {
+        uniqueNumbers.add(msg.from_number)
+        uniqueNumbers.add(msg.to_number)
+      })
+
+      query.in("phone_number", Array.from(uniqueNumbers))
+    }
+
+    const { data: contacts, error } = await query
+
+    if (error) throw error
+
+    res.json({
+      success: true,
+      data: contacts || [],
+      total: contacts?.length || 0,
+    })
+  } catch (error) {
+    console.error("[v0] Error fetching contacts:", error)
+    res.status(500).json({ success: false, error: error.message })
+  }
+})
+
 app.get("/api/whatsapp/sessions", async (req, res) => {
   try {
     console.log("[v0] ========================================")
@@ -201,8 +246,8 @@ app.get("/api/whatsapp/sessions", async (req, res) => {
       sessions?.map(async (session) => {
         let qrCodeDataUrl = null
 
-        // Convert QR string to data URL if exists
-        if (session.qr_code) {
+        // Only convert QR if status is 'qr' and not connected
+        if (session.qr_code && session.status === "qr") {
           try {
             qrCodeDataUrl = await QRCode.toDataURL(session.qr_code, {
               margin: 1,
@@ -210,7 +255,6 @@ app.get("/api/whatsapp/sessions", async (req, res) => {
               errorCorrectionLevel: "M",
               width: 300,
             })
-            console.log("[v0] Converted QR to data URL for session:", session.session_id)
           } catch (error) {
             console.error("[v0] Error converting QR to data URL:", error)
           }
@@ -221,24 +265,22 @@ app.get("/api/whatsapp/sessions", async (req, res) => {
           sessionId: session.session_id,
           name: session.name,
           phoneNumber: session.phone_number,
-          status: session.status,
-          qrCode: qrCodeDataUrl, // Now contains data URL ready for <img> src
+          status: session.status === "ready" || session.status === "connected" ? "connected" : session.status,
+          qrCode: session.status === "connected" ? null : qrCodeDataUrl,
           lastConnected: session.last_connected,
-          isConnected: session.status === "ready",
+          isConnected: session.status === "ready" || session.status === "connected",
         }
       }) || [],
     )
 
-    console.log("[v0] Returning sessions:", transformedSessions.length)
-    console.log("[v0] ========================================")
-
     res.json({
-      sessions: transformedSessions,
+      success: true,
+      data: transformedSessions,
       total: transformedSessions.length,
     })
   } catch (error) {
     console.error("[v0] ❌ Error fetching sessions:", error)
-    res.status(500).json({ error: error.message })
+    res.status(500).json({ success: false, error: error.message })
   }
 })
 
@@ -401,6 +443,95 @@ app.post("/api/whatsapp/sessions/:sessionId/connect", async (req, res) => {
   }
 })
 
+app.get("/api/messages/:sessionId", async (req, res) => {
+  try {
+    const { sessionId } = req.params
+    console.log("[v0] GET /api/messages/:sessionId:", sessionId)
+
+    const { data: messages, error } = await supabase
+      .from("messages")
+      .select("*")
+      .eq("session_id", sessionId)
+      .order("timestamp", { ascending: true })
+
+    if (error) {
+      console.error("[v0] Error fetching messages:", error)
+      throw error
+    }
+
+    res.json({
+      success: true,
+      data: messages || [],
+      total: messages?.length || 0,
+    })
+  } catch (error) {
+    console.error("[v0] Error in messages endpoint:", error)
+    res.status(500).json({ success: false, error: error.message })
+  }
+})
+
+app.post("/api/whatsapp/:sessionId/send", async (req, res) => {
+  try {
+    const { sessionId } = req.params
+    const { to, message, type = "text" } = req.body
+
+    console.log("[v0] POST /api/whatsapp/:sessionId/send:", { sessionId, to, message })
+
+    if (!to || !message) {
+      return res.status(400).json({ success: false, error: "to and message are required" })
+    }
+
+    const content = {
+      type,
+      text: message,
+    }
+
+    const sentMessage = await whatsappManager.sendMessage(sessionId, to, content)
+
+    res.json({
+      success: true,
+      data: {
+        messageId: sentMessage?.id?._serialized,
+        timestamp: Date.now(),
+      },
+    })
+  } catch (error) {
+    console.error("[v0] Error sending message:", error)
+    res.status(500).json({ success: false, error: error.message })
+  }
+})
+
+app.get("/api/whatsapp/:sessionId/status", async (req, res) => {
+  try {
+    const { sessionId } = req.params
+    console.log("[v0] GET /api/whatsapp/:sessionId/status:", sessionId)
+
+    const { data: session, error } = await supabase
+      .from("whatsapp_sessions")
+      .select("status, phone_number, last_connected")
+      .eq("session_id", sessionId)
+      .single()
+
+    if (error) throw error
+
+    const isConnected = whatsappManager.isSessionActive(sessionId)
+
+    res.json({
+      success: true,
+      data: {
+        sessionId,
+        status: isConnected ? "connected" : session.status,
+        isConnected,
+        phoneNumber: session.phone_number,
+        lastConnected: session.last_connected,
+      },
+    })
+  } catch (error) {
+    console.error("[v0] Error fetching session status:", error)
+    res.status(500).json({ success: false, error: error.message })
+  }
+})
+
 app.post("/api/whatsapp/send", async (req, res) => {
   try {
     console.log("[v0] POST /api/whatsapp/send:", req.body)
@@ -419,32 +550,6 @@ app.post("/api/whatsapp/send", async (req, res) => {
     })
   } catch (error) {
     console.error("Error sending message:", error)
-    res.status(500).json({ error: error.message })
-  }
-})
-
-app.get("/api/messages/:sessionId", async (req, res) => {
-  try {
-    const { sessionId } = req.params
-    console.log("[v0] GET /api/messages/:sessionId:", sessionId)
-
-    const { data: messages, error } = await supabase
-      .from("messages")
-      .select("*")
-      .eq("session_id", sessionId)
-      .order("timestamp", { ascending: true })
-
-    if (error) {
-      console.error("[v0] Error fetching messages:", error)
-      throw error
-    }
-
-    res.json({
-      messages: messages || [],
-      total: messages?.length || 0,
-    })
-  } catch (error) {
-    console.error("[v0] Error in messages endpoint:", error)
     res.status(500).json({ error: error.message })
   }
 })
@@ -487,7 +592,7 @@ app.post("/api/messages/send", async (req, res) => {
     })
   } catch (error) {
     console.error("[v0] Error sending message:", error)
-    res.status(500).json({ error: error.message })
+    res.status(500).json({ success: false, error: error.message })
   }
 })
 
@@ -514,6 +619,25 @@ app.get("/api/debug/whatsapp", async (req, res) => {
     console.error("[v0] Debug endpoint error:", error)
     res.status(500).json({ error: error.message, stack: error.stack })
   }
+})
+
+io.on("connection", (socket) => {
+  console.log(`[v0] 🔌 Client connected: ${socket.id}`)
+
+  socket.on("join-session", (sessionId) => {
+    console.log(`[v0] Client ${socket.id} joining session: ${sessionId}`)
+    socket.join(sessionId)
+    socket.emit("joined-session", { sessionId })
+  })
+
+  socket.on("leave-session", (sessionId) => {
+    console.log(`[v0] Client ${socket.id} leaving session: ${sessionId}`)
+    socket.leave(sessionId)
+  })
+
+  socket.on("disconnect", () => {
+    console.log(`[v0] ⚡ Client disconnected: ${socket.id}`)
+  })
 })
 
 app.use((err, req, res, next) => {

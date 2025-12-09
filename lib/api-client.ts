@@ -46,13 +46,7 @@ class APIClient {
   }
 
   private async request(endpoint: string, options: RequestInit = {}) {
-    console.log("[v0] =================================")
-    console.log("[v0] API Request")
-    console.log("[v0] =================================")
-    console.log("[v0] Endpoint:", endpoint)
-    console.log("[v0] Full URL:", this.baseURL + endpoint)
-    console.log("[v0] Method:", options.method || "GET")
-    console.log("[v0] Has Auth Token:", !!this.token)
+    console.log("[v0] API Request:", options.method || "GET", this.baseURL + endpoint)
 
     const headers: HeadersInit = {
       "Content-Type": "application/json",
@@ -69,18 +63,13 @@ class APIClient {
         headers,
       })
 
-      console.log("[v0] Response Status:", response.status, response.statusText)
-      console.log("[v0] Response Headers:", Object.fromEntries(response.headers.entries()))
+      console.log("[v0] Response Status:", response.status)
 
       if (response.status === 401) {
-        console.log("[v0] ⚠️ Token expirado ou inválido, tentando refresh...")
-        // Token expirado, tentar refresh
         const refreshed = await this.refreshToken()
         if (refreshed) {
-          // Retry request com novo token
           return this.request(endpoint, options)
         } else {
-          // Logout
           this.clearToken()
           window.location.href = "/login"
           throw new Error("Session expired")
@@ -89,44 +78,15 @@ class APIClient {
 
       if (!response.ok) {
         const error = await response.json().catch(() => ({ error: "Unknown error" }))
-        console.error("[v0] =================================")
-        console.error("[v0] API Error")
-        console.error("[v0] =================================")
-        console.error("[v0] Status:", response.status)
-        console.error("[v0] Error:", error)
-        console.error("[v0] =================================")
+        console.error("[v0] API Error:", error)
         throw new Error(error.error || `Request failed with status ${response.status}`)
       }
 
       const data = await response.json()
       console.log("[v0] ✅ Request successful")
-      console.log("[v0] =================================")
       return data
     } catch (error: any) {
-      console.error("[v0] =================================")
-      console.error("[v0] Request Failed")
-      console.error("[v0] =================================")
-      console.error("[v0] Error:", error.message)
-      console.error("[v0] URL:", this.baseURL + endpoint)
-
-      if (error.message === "Failed to fetch") {
-        console.error("[v0] ")
-        console.error("[v0] ❌ NÃO FOI POSSÍVEL CONECTAR AO BACKEND")
-        console.error("[v0] ")
-        console.error("[v0] Possíveis causas:")
-        console.error("[v0] 1. Backend offline no Railway")
-        console.error("[v0] 2. URL incorreta em NEXT_PUBLIC_API_URL")
-        console.error("[v0] 3. CORS bloqueando (falta FRONTEND_URL no Railway)")
-        console.error("[v0] 4. Firewall bloqueando requisições")
-        console.error("[v0] ")
-        console.error("[v0] Verifique:")
-        console.error("[v0] - Railway Dashboard: https://railway.app")
-        console.error("[v0] - Logs do Railway para erros")
-        console.error("[v0] - URL correta:", this.baseURL)
-        console.error("[v0] ")
-      }
-
-      console.error("[v0] =================================")
+      console.error("[v0] Request Failed:", error.message)
       throw error
     }
   }
@@ -185,8 +145,8 @@ class APIClient {
   }
 
   // Contacts
-  async getContacts(params?: any) {
-    const query = new URLSearchParams(params).toString()
+  async getContacts(params?: { sessionId?: string; limit?: number }) {
+    const query = new URLSearchParams(params as any).toString()
     return this.request(`/api/contacts${query ? `?${query}` : ""}`)
   }
 
@@ -224,6 +184,21 @@ class APIClient {
       method: "POST",
       body: JSON.stringify(data),
     })
+  }
+
+  async getMessages(sessionId: string) {
+    return this.request(`/api/messages/${sessionId}`)
+  }
+
+  async sendMessageToNumber(sessionId: string, to: string, message: string) {
+    return this.request(`/api/whatsapp/${sessionId}/send`, {
+      method: "POST",
+      body: JSON.stringify({ to, message }),
+    })
+  }
+
+  async getSessionStatus(sessionId: string) {
+    return this.request(`/api/whatsapp/${sessionId}/status`)
   }
 
   // Generic
