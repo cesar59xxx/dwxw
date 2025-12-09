@@ -48,7 +48,7 @@
     "jsonwebtoken": "latest",
     "lucide-react": "^0.454.0",
     "mongoose": "9.0.0",
-    "next": "16.0.3",
+    "next": "^16.1.0-canary.0",
     "next-themes": "latest",
     "path": "latest",
     "qrcode": "latest",
@@ -78,7 +78,7 @@
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "eslint": "^9",
-    "eslint-config-next": "16.0.3",
+    "eslint-config-next": "^16.1.0-canary.0",
     "postcss": "^8.5",
     "tailwindcss": "^4.1.9",
     "typescript": "^5"
