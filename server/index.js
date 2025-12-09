@@ -6,6 +6,7 @@ import helmet from "helmet"
 import compression from "compression"
 import rateLimit from "express-rate-limit"
 import dotenv from "dotenv"
+import QRCode from "qrcode"
 import { whatsappManager } from "./services/whatsapp-manager.service.js"
 import { supabase } from "./config/supabase.js"
 
@@ -183,44 +184,50 @@ app.get("/api/whatsapp/sessions", async (req, res) => {
   try {
     console.log("[v0] ========================================")
     console.log("[v0] GET /api/whatsapp/sessions - fetching real sessions")
-    console.log("[v0] Supabase URL:", process.env.NEXT_PUBLIC_SUPABASE_URL?.substring(0, 30) + "...")
-    console.log("[v0] Has service role key:", !!process.env.SUPABASE_SERVICE_ROLE_KEY)
 
     const { data: sessions, error } = await supabase
       .from("whatsapp_sessions")
       .select("*")
       .order("created_at", { ascending: false })
 
-    console.log("[v0] Supabase query result:")
-    console.log("[v0] - Error:", error)
-    console.log("[v0] - Data:", sessions)
-    console.log("[v0] - Sessions count:", sessions?.length || 0)
-
     if (error) {
       console.error("[v0] Supabase error:", error)
       throw error
     }
 
-    const transformedSessions =
-      sessions?.map((session) => {
-        const transformed = {
+    const transformedSessions = await Promise.all(
+      sessions?.map(async (session) => {
+        let qrCodeDataUrl = null
+
+        // Convert QR string to data URL if exists
+        if (session.qr_code) {
+          try {
+            qrCodeDataUrl = await QRCode.toDataURL(session.qr_code, {
+              margin: 1,
+              scale: 5,
+              errorCorrectionLevel: "M",
+              width: 300,
+            })
+            console.log("[v0] Converted QR to data URL for session:", session.session_id)
+          } catch (error) {
+            console.error("[v0] Error converting QR to data URL:", error)
+          }
+        }
+
+        return {
           _id: session.id,
           sessionId: session.session_id,
           name: session.name,
           phoneNumber: session.phone_number,
           status: session.status,
-          qrCode: session.qr_code,
+          qrCode: qrCodeDataUrl, // Now contains data URL ready for <img> src
           lastConnected: session.last_connected,
           isConnected: session.status === "ready",
         }
-        console.log("[v0] Transformed session:", transformed)
-        return transformed
-      }) || []
+      }) || [],
+    )
 
-    console.log("[v0] Returning sessions:", {
-      count: transformedSessions.length,
-      sessions: transformedSessions,
-    })
+    console.log("[v0] Returning sessions:", transformedSessions.length)
     console.log("[v0] ========================================")
 
     res.json({
@@ -229,7 +236,6 @@ app.get("/api/whatsapp/sessions", async (req, res) => {
     })
   } catch (error) {
     console.error("[v0] ❌ Error fetching sessions:", error)
-    console.error("[v0] Error stack:", error.stack)
     res.status(500).json({ error: error.message })
   }
 })
@@ -333,10 +339,25 @@ app.get("/api/whatsapp/sessions/:sessionId/qr", async (req, res) => {
 
     if (error) throw error
 
+    let qrCodeDataUrl = null
+    if (session.qr_code) {
+      try {
+        qrCodeDataUrl = await QRCode.toDataURL(session.qr_code, {
+          margin: 1,
+          scale: 5,
+          errorCorrectionLevel: "M",
+          width: 300,
+        })
+        console.log("[v0] QR code converted to data URL")
+      } catch (error) {
+        console.error("[v0] Error converting QR:", error)
+      }
+    }
+
     res.json({
-      qrCode: session.qr_code,
+      qrCode: qrCodeDataUrl,
       status: session.status,
-      message: session.qr_code ? "Escaneie o QR code no WhatsApp" : "Conecte a sessão para gerar QR code",
+      message: qrCodeDataUrl ? "Escaneie o QR code no WhatsApp" : "Conecte a sessão para gerar QR code",
     })
   } catch (error) {
     console.error("Error fetching QR code:", error)

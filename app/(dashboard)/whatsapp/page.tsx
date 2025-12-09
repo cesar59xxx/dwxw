@@ -57,6 +57,11 @@ export default function WhatsAppPage() {
       console.log("[v0] 📱 Received QR string for session:", sessionId)
       console.log("[v0] QR string length:", qr?.length)
 
+      if (!qr) {
+        console.error("[v0] ❌ QR string is empty or undefined!")
+        return
+      }
+
       try {
         const qrImage = await QRCode.toDataURL(qr, {
           margin: 1,
@@ -65,15 +70,22 @@ export default function WhatsAppPage() {
           width: 300,
         })
 
-        console.log("[v0] QR image generated with perfect fidelity")
+        console.log("[v0] ✅ QR image generated successfully")
+        console.log("[v0] QR data URL length:", qrImage?.length)
 
         setSessions((prev) =>
           prev.map((s) => (s.sessionId === sessionId ? { ...s, qrCode: qrImage, status: "qr" } : s)),
         )
 
-        setQrCodeDialog((prev) => (prev.sessionId === sessionId ? { ...prev, qrCode: qrImage } : prev))
+        setQrCodeDialog((prev) => {
+          if (prev.sessionId === sessionId) {
+            console.log("[v0] Updating QR dialog with new QR image")
+            return { ...prev, qrCode: qrImage }
+          }
+          return prev
+        })
       } catch (error) {
-        console.error("[v0] Error generating QR image:", error)
+        console.error("[v0] ❌ Error generating QR image:", error)
       }
     })
 
@@ -344,12 +356,13 @@ export default function WhatsAppPage() {
                 <div className="text-center">
                   <RefreshCw className="h-8 w-8 animate-spin text-muted-foreground mx-auto mb-2" />
                   <p className="text-sm text-muted-foreground">Gerando QR Code...</p>
+                  <p className="text-xs text-muted-foreground mt-2">Aguarde alguns segundos...</p>
                 </div>
               </div>
             )}
           </div>
           <p className="text-sm text-muted-foreground text-center">
-            {qrCodeDialog.qrCode ? "O QR Code expira em 60 segundos" : "Aguarde enquanto geramos seu QR Code"}
+            {qrCodeDialog.qrCode ? "O QR Code expira em 60 segundos" : "Conectando ao WhatsApp..."}
           </p>
         </DialogContent>
       </Dialog>
