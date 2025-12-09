@@ -15,6 +15,7 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog"
+import { io, type Socket } from "socket.io-client"
 
 interface Session {
   _id: string
@@ -31,40 +32,79 @@ export default function WhatsAppPage() {
   const [sessions, setSessions] = useState<Session[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [newSessionName, setNewSessionName] = useState("")
-  const [qrCodeDialog, setQrCodeDialog] = useState<{ open: boolean; qrCode: string | null }>({
+  const [qrCodeDialog, setQrCodeDialog] = useState<{ open: boolean; qrCode: string | null; sessionId: string | null }>({
     open: false,
     qrCode: null,
+    sessionId: null,
   })
+  const [socket, setSocket] = useState<Socket | null>(null)
+
+  useEffect(() => {
+    const backendUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000"
+    console.log("[v0] Connecting to WebSocket at:", backendUrl)
+
+    const socketConnection = io(backendUrl, {
+      transports: ["websocket", "polling"],
+      reconnection: true,
+    })
+
+    socketConnection.on("connect", () => {
+      console.log("[v0] ✅ WebSocket connected!")
+    })
+
+    socketConnection.on("whatsapp:qr", ({ sessionId, qrCode }) => {
+      console.log("[v0] 📱 Received QR code for session:", sessionId)
+      console.log("[v0] QR code length:", qrCode?.length)
+
+      setSessions((prev) => prev.map((s) => (s.sessionId === sessionId ? { ...s, qrCode, status: "qr" } : s)))
+
+      setQrCodeDialog((prev) => (prev.sessionId === sessionId ? { ...prev, qrCode } : prev))
+    })
+
+    socketConnection.on("whatsapp:authenticated", ({ sessionId }) => {
+      console.log("[v0] ✅ Session authenticated:", sessionId)
+      setSessions((prev) =>
+        prev.map((s) => (s.sessionId === sessionId ? { ...s, status: "authenticated", qrCode: null } : s)),
+      )
+      setQrCodeDialog((prev) => (prev.sessionId === sessionId ? { open: false, qrCode: null, sessionId: null } : prev))
+    })
+
+    socketConnection.on("whatsapp:ready", ({ sessionId, phoneNumber }) => {
+      console.log("[v0] ✅ Session ready:", sessionId, phoneNumber)
+      setSessions((prev) =>
+        prev.map((s) => (s.sessionId === sessionId ? { ...s, status: "ready", isConnected: true, phoneNumber } : s)),
+      )
+    })
+
+    socketConnection.on("whatsapp:disconnected", ({ sessionId }) => {
+      console.log("[v0] ⚠️ Session disconnected:", sessionId)
+      setSessions((prev) =>
+        prev.map((s) => (s.sessionId === sessionId ? { ...s, status: "disconnected", isConnected: false } : s)),
+      )
+    })
+
+    socketConnection.on("disconnect", () => {
+      console.log("[v0] ⚠️ WebSocket disconnected")
+    })
+
+    setSocket(socketConnection)
+
+    return () => {
+      socketConnection.disconnect()
+    }
+  }, [])
 
   const loadSessions = async () => {
     try {
-      console.log("[v0] ========================================")
       console.log("[v0] Loading sessions...")
-      console.log("[v0] API URL:", process.env.NEXT_PUBLIC_API_URL)
 
       const data = await apiClient.getSessions()
 
-      console.log("[v0] Full response:", JSON.stringify(data, null, 2))
-      console.log("[v0] Sessions array:", data.sessions)
-      console.log("[v0] Sessions type:", typeof data.sessions)
-      console.log("[v0] Is Array?:", Array.isArray(data.sessions))
-      console.log("[v0] Sessions length:", data.sessions?.length)
-
-      if (data.sessions && data.sessions.length > 0) {
-        console.log("[v0] ✅ Found sessions:", data.sessions.length)
-        data.sessions.forEach((session, index) => {
-          console.log(`[v0] Session ${index}:`, session)
-        })
-      } else {
-        console.log("[v0] ⚠️ No sessions found in response")
-      }
-      console.log("[v0] ========================================")
+      console.log("[v0] Sessions loaded:", data.sessions?.length || 0)
 
       setSessions(data.sessions || [])
     } catch (error) {
       console.error("[v0] ❌ Failed to load sessions:", error)
-      console.error("[v0] Error details:", error.message)
-      console.error("[v0] Error stack:", error.stack)
     } finally {
       setIsLoading(false)
     }
@@ -73,8 +113,7 @@ export default function WhatsAppPage() {
   useEffect(() => {
     loadSessions()
 
-    // Atualizar a cada 5 segundos
-    const interval = setInterval(loadSessions, 5000)
+    const interval = setInterval(loadSessions, 10000)
     return () => clearInterval(interval)
   }, [])
 
@@ -82,25 +121,26 @@ export default function WhatsAppPage() {
     if (!newSessionName.trim()) return
 
     try {
-      console.log("[v0] ========================================")
       console.log("[v0] Creating session with name:", newSessionName)
       const result = await apiClient.createSession({ name: newSessionName })
-      console.log("[v0] Session create response:", JSON.stringify(result, null, 2))
-      console.log("[v0] ========================================")
+      console.log("[v0] Session created:", result)
 
       setNewSessionName("")
 
-      // Fechar o dialog
-      const closeButton = document.querySelector('[role="dialog"] button[type="button"]')
+      const closeButton = document.querySelector('[role="dialog"] button[type="button"]') as HTMLButtonElement
       if (closeButton) closeButton.click()
 
-      // Recarregar sessões imediatamente
       await loadSessions()
 
-      alert("Sessão criada com sucesso! Aguarde a conexão...")
+      setTimeout(() => {
+        setQrCodeDialog({
+          open: true,
+          qrCode: null,
+          sessionId: result.session.sessionId,
+        })
+      }, 2000)
     } catch (error: any) {
       console.error("[v0] ❌ Error creating session:", error)
-      console.error("[v0] Error message:", error.message)
       alert(error.message || "Erro ao criar sessão")
     }
   }
@@ -110,18 +150,13 @@ export default function WhatsAppPage() {
       console.log("[v0] Connecting session:", sessionId)
       await apiClient.connectSession(sessionId)
 
-      setTimeout(async () => {
-        console.log("[v0] Fetching QR code for session:", sessionId)
-        const data = await apiClient.get(`/api/whatsapp/sessions/${sessionId}/qr`)
-        console.log("[v0] QR code data:", data)
-        if (data.qrCode) {
-          setQrCodeDialog({ open: true, qrCode: data.qrCode })
-        } else {
-          console.log("[v0] No QR code yet, keep refreshing...")
-        }
-        // Atualizar lista de sessões
-        await loadSessions()
-      }, 5000)
+      setQrCodeDialog({
+        open: true,
+        qrCode: null,
+        sessionId,
+      })
+
+      await loadSessions()
     } catch (error: any) {
       console.error("[v0] Error connecting session:", error)
       alert(error.message || "Erro ao conectar sessão")
@@ -265,8 +300,10 @@ export default function WhatsAppPage() {
         </Card>
       )}
 
-      {/* QR Code Dialog */}
-      <Dialog open={qrCodeDialog.open} onOpenChange={(open) => setQrCodeDialog({ open, qrCode: null })}>
+      <Dialog
+        open={qrCodeDialog.open}
+        onOpenChange={(open) => setQrCodeDialog({ open, qrCode: null, sessionId: null })}
+      >
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Escaneie o QR Code</DialogTitle>
@@ -274,14 +311,24 @@ export default function WhatsAppPage() {
           </DialogHeader>
           <div className="flex justify-center p-6">
             {qrCodeDialog.qrCode ? (
-              <img src={qrCodeDialog.qrCode || "/placeholder.svg"} alt="QR Code" className="w-64 h-64" />
+              <img
+                src={qrCodeDialog.qrCode || "/placeholder.svg"}
+                alt="QR Code"
+                className="w-64 h-64"
+                style={{ objectFit: "contain" }}
+              />
             ) : (
               <div className="w-64 h-64 flex items-center justify-center bg-muted rounded">
-                <RefreshCw className="h-8 w-8 animate-spin text-muted-foreground" />
+                <div className="text-center">
+                  <RefreshCw className="h-8 w-8 animate-spin text-muted-foreground mx-auto mb-2" />
+                  <p className="text-sm text-muted-foreground">Gerando QR Code...</p>
+                </div>
               </div>
             )}
           </div>
-          <p className="text-sm text-muted-foreground text-center">O QR Code expira em 60 segundos</p>
+          <p className="text-sm text-muted-foreground text-center">
+            {qrCodeDialog.qrCode ? "O QR Code expira em 60 segundos" : "Aguarde enquanto geramos seu QR Code"}
+          </p>
         </DialogContent>
       </Dialog>
     </div>

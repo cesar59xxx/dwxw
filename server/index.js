@@ -6,7 +6,7 @@ import helmet from "helmet"
 import compression from "compression"
 import rateLimit from "express-rate-limit"
 import dotenv from "dotenv"
-import { whatsappManager } from "./services/whatsapp-manager-simple.js"
+import { whatsappManager } from "./services/whatsapp-manager.service.js"
 import { supabase } from "./config/supabase.js"
 
 dotenv.config()
@@ -247,10 +247,14 @@ app.post("/api/whatsapp/sessions", async (req, res) => {
     console.log("[v0] ==================== CREATING SESSION ====================")
     console.log("[v0] Session name:", name)
     console.log("[v0] Session ID:", sessionId)
-    console.log("[v0] Supabase URL:", process.env.NEXT_PUBLIC_SUPABASE_URL)
-    console.log("[v0] Has service_role key:", !!process.env.SUPABASE_SERVICE_ROLE_KEY)
-    console.log("[v0] Key length:", process.env.SUPABASE_SERVICE_ROLE_KEY?.length)
-    console.log("[v0] Attempting INSERT...")
+
+    const { data: tenants } = await supabase.from("tenants").select("id").limit(1).single()
+
+    const tenantId = tenants?.id
+
+    if (!tenantId) {
+      return res.status(500).json({ error: "No tenant found. Please create a tenant first." })
+    }
 
     const { data: newSession, error } = await supabase
       .from("whatsapp_sessions")
@@ -258,6 +262,7 @@ app.post("/api/whatsapp/sessions", async (req, res) => {
         {
           session_id: sessionId,
           name,
+          tenant_id: tenantId, // Adding tenant_id to fix the constraint error
           status: "disconnected",
           is_active: true,
         },
@@ -295,9 +300,11 @@ app.post("/api/whatsapp/sessions", async (req, res) => {
 
     setTimeout(async () => {
       try {
+        console.log(`[v0] Initializing WhatsApp for session ${sessionId}`)
         await whatsappManager.initializeSession(sessionId)
+        console.log(`[v0] ✅ WhatsApp initialized for session ${sessionId}`)
       } catch (error) {
-        console.error(`Failed to initialize WhatsApp: ${error.message}`)
+        console.error(`[v0] ❌ Failed to initialize WhatsApp: ${error.message}`)
         await supabase.from("whatsapp_sessions").update({ status: "error" }).eq("session_id", sessionId)
       }
     }, 1000)
