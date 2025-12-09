@@ -1,6 +1,5 @@
 import pkg from "whatsapp-web.js"
 const { Client, LocalAuth } = pkg
-import qrcode from "qrcode"
 import { supabase } from "../config/supabase.js"
 import fs from "fs"
 
@@ -81,26 +80,25 @@ class WhatsAppManager {
         console.log(`[${sessionId}] 📱 QR Code gerado`)
 
         try {
-          // Converter QR para base64
-          const qrCodeDataUrl = await qrcode.toDataURL(qr)
-
-          // Atualizar no banco
+          // Atualizar no banco com string QR original
           await supabase
             .from("whatsapp_sessions")
             .update({
               status: "qr",
-              qr_code: qrCodeDataUrl,
+              qr_code: qr, // String original sem conversão
               updated_at: new Date().toISOString(),
             })
             .eq("session_id", sessionId)
 
-          // Emitir via Socket.IO
+          // Emitir via Socket.IO apenas a string original
           if (global.io) {
             global.io.emit("whatsapp:qr", {
               sessionId,
-              qrCode: qrCodeDataUrl,
+              qr, // String original do QR
             })
           }
+
+          console.log(`[${sessionId}] QR emitido via WebSocket`)
         } catch (error) {
           console.error(`[${sessionId}] Erro ao processar QR:`, error)
         }

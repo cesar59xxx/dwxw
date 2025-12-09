@@ -16,6 +16,7 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog"
 import { io, type Socket } from "socket.io-client"
+import QRCode from "qrcode"
 
 interface Session {
   _id: string
@@ -52,13 +53,28 @@ export default function WhatsAppPage() {
       console.log("[v0] ✅ WebSocket connected!")
     })
 
-    socketConnection.on("whatsapp:qr", ({ sessionId, qrCode }) => {
-      console.log("[v0] 📱 Received QR code for session:", sessionId)
-      console.log("[v0] QR code length:", qrCode?.length)
+    socketConnection.on("whatsapp:qr", async ({ sessionId, qr }) => {
+      console.log("[v0] 📱 Received QR string for session:", sessionId)
+      console.log("[v0] QR string length:", qr?.length)
 
-      setSessions((prev) => prev.map((s) => (s.sessionId === sessionId ? { ...s, qrCode, status: "qr" } : s)))
+      try {
+        const qrImage = await QRCode.toDataURL(qr, {
+          margin: 1,
+          scale: 5,
+          errorCorrectionLevel: "M",
+          width: 300,
+        })
 
-      setQrCodeDialog((prev) => (prev.sessionId === sessionId ? { ...prev, qrCode } : prev))
+        console.log("[v0] QR image generated with perfect fidelity")
+
+        setSessions((prev) =>
+          prev.map((s) => (s.sessionId === sessionId ? { ...s, qrCode: qrImage, status: "qr" } : s)),
+        )
+
+        setQrCodeDialog((prev) => (prev.sessionId === sessionId ? { ...prev, qrCode: qrImage } : prev))
+      } catch (error) {
+        console.error("[v0] Error generating QR image:", error)
+      }
     })
 
     socketConnection.on("whatsapp:authenticated", ({ sessionId }) => {
@@ -313,9 +329,15 @@ export default function WhatsAppPage() {
             {qrCodeDialog.qrCode ? (
               <img
                 src={qrCodeDialog.qrCode || "/placeholder.svg"}
-                alt="QR Code"
-                className="w-64 h-64"
-                style={{ objectFit: "contain" }}
+                alt="WhatsApp QR Code"
+                width={300}
+                height={300}
+                style={{
+                  imageRendering: "pixelated",
+                  objectFit: "contain",
+                  maxWidth: "300px",
+                  maxHeight: "300px",
+                }}
               />
             ) : (
               <div className="w-64 h-64 flex items-center justify-center bg-muted rounded">
