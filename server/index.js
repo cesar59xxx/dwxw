@@ -143,6 +143,8 @@ app.get("/", (req, res) => {
       sendMessage: "/api/whatsapp/send",
       debugWhatsApp: "/api/debug/whatsapp",
       testSupabase: "/api/test/supabase",
+      fetchMessages: "/api/messages/:sessionId",
+      sendMessageEndpoint: "/api/messages/send",
     },
   })
 })
@@ -417,6 +419,74 @@ app.post("/api/whatsapp/send", async (req, res) => {
     })
   } catch (error) {
     console.error("Error sending message:", error)
+    res.status(500).json({ error: error.message })
+  }
+})
+
+app.get("/api/messages/:sessionId", async (req, res) => {
+  try {
+    const { sessionId } = req.params
+    console.log("[v0] GET /api/messages/:sessionId:", sessionId)
+
+    const { data: messages, error } = await supabase
+      .from("messages")
+      .select("*")
+      .eq("session_id", sessionId)
+      .order("timestamp", { ascending: true })
+
+    if (error) {
+      console.error("[v0] Error fetching messages:", error)
+      throw error
+    }
+
+    res.json({
+      messages: messages || [],
+      total: messages?.length || 0,
+    })
+  } catch (error) {
+    console.error("[v0] Error in messages endpoint:", error)
+    res.status(500).json({ error: error.message })
+  }
+})
+
+app.post("/api/messages/send", async (req, res) => {
+  try {
+    const { sessionId, to, message } = req.body
+    console.log("[v0] POST /api/messages/send:", { sessionId, to, message })
+
+    if (!sessionId || !to || !message) {
+      return res.status(400).json({ error: "sessionId, to and message are required" })
+    }
+
+    const content = {
+      type: "text",
+      text: message,
+    }
+
+    const sentMessage = await whatsappManager.sendMessage(sessionId, to, content)
+
+    const messageData = {
+      sessionId,
+      from: sessionId,
+      to,
+      body: message,
+      timestamp: Date.now() / 1000,
+      direction: "outgoing",
+    }
+
+    await whatsappManager.saveMessage(sessionId, messageData)
+
+    if (global.io) {
+      global.io.emit("whatsapp:message", messageData)
+    }
+
+    res.json({
+      success: true,
+      message: "Message sent successfully",
+      messageId: sentMessage?.id?._serialized,
+    })
+  } catch (error) {
+    console.error("[v0] Error sending message:", error)
     res.status(500).json({ error: error.message })
   }
 })

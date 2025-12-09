@@ -118,7 +118,7 @@ class WhatsAppManager {
           .eq("session_id", sessionId)
 
         if (global.io) {
-          global.io.emit("whatsapp:authenticated", { sessionId })
+          global.io.emit("whatsapp:status", { sessionId, status: "authenticated" })
         }
       })
 
@@ -153,17 +153,14 @@ class WhatsAppManager {
         await supabase
           .from("whatsapp_sessions")
           .update({
-            status: "ready",
+            status: "connected",
             phone_number: info.wid.user,
             updated_at: new Date().toISOString(),
           })
           .eq("session_id", sessionId)
 
         if (global.io) {
-          global.io.emit("whatsapp:ready", {
-            sessionId,
-            phoneNumber: info.wid.user,
-          })
+          global.io.emit("whatsapp:status", { sessionId, status: "connected", phoneNumber: info.wid.user })
         }
       })
 
@@ -197,9 +194,24 @@ class WhatsAppManager {
       // Nova mensagem recebida
       client.on("message", async (msg) => {
         try {
-          await this.handleIncomingMessage(msg, sessionId)
+          console.log(`[${sessionId}] 📨 Message received from ${msg.from}`)
+
+          const messageData = {
+            sessionId,
+            from: msg.from,
+            to: msg.to || sessionId,
+            body: msg.body,
+            timestamp: msg.timestamp,
+            direction: msg.fromMe ? "outgoing" : "incoming",
+          }
+
+          await this.saveMessage(sessionId, messageData)
+
+          if (global.io) {
+            global.io.emit("whatsapp:message", messageData)
+          }
         } catch (error) {
-          console.error(`[${sessionId}] Erro ao processar mensagem:`, error)
+          console.error(`[${sessionId}] Error handling message:`, error)
         }
       })
 
@@ -474,6 +486,40 @@ class WhatsAppManager {
    */
   isSessionActive(sessionId) {
     return this.clients.has(sessionId)
+  }
+
+  /**
+   * Save message to database
+   */
+  async saveMessage(sessionId, messageData) {
+    try {
+      const { data, error } = await supabase
+        .from("messages")
+        .insert([
+          {
+            session_id: sessionId,
+            from_number: messageData.from,
+            to_number: messageData.to,
+            body: messageData.body,
+            timestamp: new Date(messageData.timestamp * 1000).toISOString(),
+            direction: messageData.direction,
+            status: "delivered",
+          },
+        ])
+        .select()
+        .single()
+
+      if (error) {
+        console.error(`[${sessionId}] Error saving message:`, error)
+        throw error
+      }
+
+      console.log(`[${sessionId}] ✅ Message saved to database`)
+      return data
+    } catch (error) {
+      console.error(`[${sessionId}] Failed to save message:`, error)
+      throw error
+    }
   }
 }
 
